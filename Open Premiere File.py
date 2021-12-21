@@ -1,4 +1,5 @@
 # -*- coding: UTF-8 -*-
+
 import gzip, shutil, os
 import xml.etree.ElementTree as ET
 
@@ -10,7 +11,7 @@ class Sequence:
     self.width = ''
     self.vidframerate = 0
     self.audframerate = 0
-    self.sequence = []
+    self.clips = [] #TrackID, file path, clip name, tape, timeline In, timeline Out, media IN, media OUT, media Frame Rate
 
 def OpenProj(filename):
 
@@ -22,9 +23,7 @@ def OpenProj(filename):
     xml_file_handle = open(fileInside, 'rb')
     xml_as_string = xml_file_handle.read()
     xml_file_handle.close()
-    #print (xml_as_string)
-    #os.remove(fileInside)
-
+    #os.remove(fileInside) #Interine File
   return xml_as_string
 
 def SaveProj(xml, outFile):
@@ -96,6 +95,13 @@ def loadSequences(xml):
                           #print ('Clip Start position in Timeline: ', start)
                           end = int(videoClipTrackItems.find('ClipTrackItem/TrackItem/End').text)
                           end = (end / 8441789933)-1
+
+                          #if it is a text graphic
+                          try:
+                            textRef=videoClipTrackItems.find('ClipTrackItem/ComponentOwner/Components').get('ObjectRef')
+                          except:
+                            textRef=None
+
                           #print ('Clip End position in Timeline: ', end)
 
                           #Now Retrieving more information from each SubClip Linked
@@ -108,6 +114,22 @@ def loadSequences(xml):
                               else:
                                 masterClipRef= None
                               clipName = subclips.find('Name').text
+
+                              #Try Retrieving text from Premiere
+                              if clipName == 'Graphic':
+                                try:
+                                  for componentsID in root.findall('VideoComponentChain'):
+                                    componentID = componentsID.get('ObjectID')
+                                    if textRef == componentID:
+                                      videoFilterRef = componentsID.find('ComponentChain/Components/Component').get('ObjectRef')
+                                      if root.findall('VideoFilterComponent') !=None:
+                                        for videoFilterComponents in root.findall('VideoFilterComponent'):
+                                          videoFilterID = videoFilterComponents.get('ObjectID')
+                                          if videoFilterID == videoFilterRef:
+                                            clipName = videoFilterComponents.find('Component/InstanceName').text
+                                except:
+                                  clipName = clipName
+
                               #print ('Clip Name is', clipName)
 
                               #Retrieving more information from VideoClip Objects
@@ -132,18 +154,22 @@ def loadSequences(xml):
                                         for clipLoggings in root.findall('ClipLoggingInfo'):
                                           clipLoggingID = clipLoggings.get ('ObjectID')
                                           if clipLoggingID == clipLoggingRef:
-                                            if clipLoggings.find('TapeName').text != None:
-                                              tapeName = clipLoggings.find('TapeName').text
+                                            try: tapeName = clipLoggings.find('TapeName').text
                                               #print ('TapeName:', tapeName)
-                                            else:
+                                            except:
                                               tapeName = 'Not Available'
-                                            if clipLoggings.find('MediaInPoint').text != None:
+                                            try:
                                               mediaInP = int(clipLoggings.find('MediaInPoint').text)
                                               mediaInP = (mediaInP / 8441789933)
-                                              print ('Media Start position:',mediaInP)
+                                              #print ('Media Start position:',mediaInP)
+                                            except: mediaInP = 0
+                                            try:
                                               mediaOutP = int(clipLoggings.find('MediaOutPoint').text)
                                               mediaOutP = (mediaOutP / 8441789933)-1
                                               #print ('Media End position:',mediaOutP)
+                                            except:
+                                              mediaOutP = 0
+
                                               mediaFrameR = int(clipLoggings.find('MediaFrameRate').text)
                                               mediaFrameR = round((10594584000*23.976)/ mediaFrameR,3)
                                               #print ('Medias Original Frame Rate :', mediaFrameR)
@@ -161,12 +187,17 @@ def loadSequences(xml):
                                           mediaID = medias.get('ObjectUID')
                                           if mediaID == mediaRef:
                                             filePath = medias.find('FilePath').text
-                                            #print ('Its file path is ', filePath)
+                                            try: #Internal Premiere's clips have non valid a numeric reference for file path
+                                              filePath = int(filePath)
+                                              filePath = 'Not Available'
+                                              #print ('Its file path is ', filePath)
+                                            except:
+                                              print ('Its file path is ', filePath)
 
-                      # Add Info to the sequences' list.
-                      seq[n].sequence.append([('SEQID'+str(n)),('V' + videoClipTrackID), filePath, tapeName, timecoder(start, seq[n].vidframerate),timecoder(end, seq[n].vidframerate),timecoder((mediaInP + clipTimecodeIn), seq[n].vidframerate),timecoder((mediaOutP + clipTimecodeOut), seq[n].vidframerate),mediaFrameR])  # TrackID, fpath, tape, timelineIn, timelineOut, mediaIN, mediaOUT
+                      # Add Info to the sequences' clip list.
+                      seq[n].clips.append([('SEQ'+str(n)),('VTRK' + videoClipTrackID), filePath, clipName, tapeName, timecoder(start, seq[n].vidframerate),timecoder(end, seq[n].vidframerate),timecoder((mediaInP + clipTimecodeIn), seq[n].vidframerate),timecoder((mediaOutP + clipTimecodeOut), seq[n].vidframerate),mediaFrameR])
 
-          #Now Check Audio Tracks
+        #Now Check Audio Tracks
         for trackGroupIDs in sequences.findall('TrackGroups/TrackGroup/Second/.[@ObjectRef]'):
           ObjectRef = trackGroupIDs.get('ObjectRef')  # Referencia al ID de VideoTrackGroups
 
@@ -269,11 +300,11 @@ def loadSequences(xml):
                                             filePath = medias.find('FilePath').text
                                             #print ('Its file path is ', filePath)
 
-                      #Add Info to the sequences' list.
-                      seq[n].sequence.append([('SEQID'+str(n)),('A'+audioClipTrackID),filePath, tapeName, timecoder(start,seq[n].vidframerate), timecoder (end, seq[n].vidframerate), timecoder((mediaInP+clipTimecodeIn),seq[n].vidframerate),timecoder((mediaOutP+clipTimecodeOut),seq[n].vidframerate),mediaFrameR]) #TrackID, fpath, tape, timelineIn, timelineOut, mediaIN, mediaOUT
+                      #Add Info to the sequences' clip list.
+                      seq[n].clips.append([('SEQ'+str(n)),('ATRK'+audioClipTrackID),filePath, clipName, tapeName, timecoder(start,seq[n].vidframerate), timecoder (end, seq[n].vidframerate), timecoder((mediaInP+clipTimecodeIn),seq[n].vidframerate),timecoder((mediaOutP+clipTimecodeOut),seq[n].vidframerate),mediaFrameR])
 
         print (seq[n].name, seq[n].vidframerate)
-        print (seq[n].sequence)
+        print (seq[n].clips)
         n += 1
 
 def timecoder(frames, timebase):
@@ -292,8 +323,9 @@ def timecoder(frames, timebase):
     return "%02d:%02d:%02d:%03d" % (h, m, s, mseg)
 
 
-xml = OpenProj('popup2.prproj')
+xml = OpenProj('popup2.prproj') #YourFile Here
 loadSequences(xml)
+print ('OK')
 #save = SaveProj (xml,'proyectonuevo.prproj')
 
 #Calculo para frames y frecuencias
