@@ -3,15 +3,45 @@
 import gzip, shutil, os
 import xml.etree.ElementTree as ET
 
+
 class Sequence:
-  def __init__(self, id): #from Sequence Tab
+  def __init__(self):
     self.id = id
     self.name = ''
     self.height = ''
     self.width = ''
     self.vidframerate = 0
     self.audframerate = 0
-    self.clips = [] #TrackID, file path, clip name, tape, timeline In, timeline Out, media IN, media OUT, media Frame Rate
+    self.timelime = [] #TrackID, file path, clip name, tape, timeline In, timeline Out, media IN, media OUT, media Frame Rate
+    self.inBin = 0
+
+class MasterClip:
+  def __init__(self):
+    self.id = '' # Id linking Bins and its instances in Sequences
+    self.type = '' #Audio, Video, Other
+    self.name = ''
+    self.filePath = ''
+    self.tapeName = ''
+    self.frameRate = 0
+    self.mediaStart = 0 #Media's start timecode
+    self.mediaEnd = 0
+    self.inBin = 0
+
+class Bin:
+  def __init__(self, name, selfid):
+    self.id = selfid
+    self.name = name
+    self.contains = []
+    self.inBin = None
+
+  def ingest(self, clipid):
+    self.contains.append(clipid)
+
+  def contains (self, clipid):
+    if clipid in self.contains:
+      return True
+    else:
+      return False
 
 def OpenProj(filename):
 
@@ -39,273 +69,316 @@ def SaveProj(xml, outFile):
       f_in.close()
   os.remove(fileInside)
 
-def loadSequences(xml):
+def openSequence(xml, id): #FALTA HACER ESTO VINCULADO A GETMEDIALIST IDs
 
+  openId = id
   root = ET.fromstring(xml)
-  trackID = []
-
-  seq =[]
   n = 0
 
-  for sequences in root.findall('.//Name/..[@ClassID]'):
-      if sequences.get('ClassID') == '6a15d903-8739-11d5-af2d-9b7855ad8974':
+  for sequences in root.findall('./Sequence'):
+    #print (len(seq), n)
+    id =  sequences.get('ObjectUID')
+    if openId == id:
+      # First Check Video Tracks
+      for trackGroupIDs in sequences.findall('TrackGroups/TrackGroup/Second/.[@ObjectRef]'):
+        ObjectRef = trackGroupIDs.get('ObjectRef') #Referencia al ID de VideoTrackGroups
 
-        #print (len(seq), n)
-        seq.insert(n, Sequence(''))
-        seq[n].id = sequences.get('ObjectUID')
-        seq[n].name = sequences.find('Name').text
-        seq[n].height = sequences.find('Node/Properties/MZ.Sequence.PreviewFrameSizeHeight').text
-        seq[n].width = sequences.find('Node/Properties/MZ.Sequence.PreviewFrameSizeWidth').text
+        for videoTrackGroup in root.findall('.//VideoTrackGroup'):
+          if ObjectRef == videoTrackGroup.get('ObjectID'):
+            for tracksID in videoTrackGroup.findall('TrackGroup/Tracks/Track'):
+              trackID = tracksID.get('ObjectURef')
 
-        #Find TrackGroup's ObjectRef
+              #Link between TrackGroups & ClipTrackItems via ClipTrack
+              for videoClipTracks in root.findall('.//VideoClipTrack'):
+                videoClipTrackID = videoClipTracks.get('ObjectUID')
+                if videoClipTrackID == trackID:
+                  videoClipTrackID = videoClipTracks.find('ClipTrack/Track/ID').text
+                  for trackItems in videoClipTracks.findall('ClipTrack/ClipItems/TrackItems/TrackItem'):
+                    trackItem = trackItems.get('ObjectRef')
 
-        #print ('Sequence ', seq[n].name, 'with ID ', seq[n].id)
+                    #Retrieving more information from each VideoClipTrackItem
+                    for videoClipTrackItems in root.findall('.//VideoClipTrackItem'):
+                      videoClipTrackItem = videoClipTrackItems.get ('ObjectID')
+                      if videoClipTrackItem == trackItem:
+                        start = int(videoClipTrackItems.find('ClipTrackItem/TrackItem/Start').text)
+                        start = start / 8441789933
+                        #print ('Clip Start position in Timeline: ', start)
+                        end = int(videoClipTrackItems.find('ClipTrackItem/TrackItem/End').text)
+                        end = (end / 8441789933)-1
+                        #print ('Clip End position in Timeline: ', end)
 
-        # First Check Video Tracks
+                        #Now Retrieving more information from each SubClip Linked
+                        subClipRef = videoClipTrackItems.find('ClipTrackItem/SubClip').get('ObjectRef') #SubClip's Ref links with SubCLips
+                        for subclips in root.findall('.//SubClip'):
+                          subclip = subclips.get('ObjectID')
+                          if subclip == subClipRef:
+                            if subclips.find('MasterClip') != None:
+                              masterClipRef = subclips.find('MasterClip').get('ObjectURef') #This must be linked with clips' ID
+                            else:
+                              masterClipRef= None
 
-        for trackGroupIDs in sequences.findall('TrackGroups/TrackGroup/Second/.[@ObjectRef]'):
-          ObjectRef = trackGroupIDs.get('ObjectRef') #Referencia al ID de VideoTrackGroups
+                            #Retrieving Relative Amount of frames available since start of MasterClip
+                            clipRef = subclips.find('Clip').get('ObjectRef')
+                            for videoclips in root.findall('.//VideoClip'):
+                              videoclip = videoclips.get('ObjectID')
+                              if videoclip == clipRef:
+                                clipTimecodeIn = int(videoclips.find('Clip/InPoint').text)
+                                clipTimecodeOut = int(videoclips.find('Clip/OutPoint').text)
 
-          for videoTrackGroup in root.findall('.//VideoTrackGroup'):
-            if ObjectRef == videoTrackGroup.get('ObjectID'):
+                    # Add Info to the sequences' clip list.
+                    #Buscar secuencia y agregar lista de clips ahora.
+                    for sequence in projectMediaList:
+                        if sequence.id == openId:
+                          sequence.timeline.append((('VTRK' + videoClipTrackID), masterClipRef, start, end, clipTimecodeIn, clipTimecodeOut))
 
-              #Frame Rate del Video TrackGroup
-              seq[n].vidframerate = int(videoTrackGroup.find('TrackGroup/FrameRate').text)
-              seq[n].vidframerate = round((10594584000*23.976)/ (seq[n].vidframerate),3)
-              #print ('Video FrameRate: ', seq[n].vidframerate, 'fps')
+      #Now Check Audio Tracks
+      for trackGroupIDs in sequences.findall('TrackGroups/TrackGroup/Second/.[@ObjectRef]'):
+        ObjectRef = trackGroupIDs.get('ObjectRef')  # Referencia al ID de VideoTrackGroups
 
-              for tracksID in videoTrackGroup.findall('TrackGroup/Tracks/Track'):
-                trackID = tracksID.get('ObjectURef')
+        for audioClipTrackID in root.findall('.//AudioTrackGroup'):
+          if ObjectRef == audioClipTrackID.get('ObjectID'):
 
-                #Link between TrackGroups & ClipTrackItems via ClipTrack
-                for videoClipTracks in root.findall('.//VideoClipTrack'):
-                  videoClipTrackID = videoClipTracks.get('ObjectUID')
-                  if videoClipTrackID == trackID:
-                    videoClipTrackID = videoClipTracks.find('ClipTrack/Track/ID').text
-                    for trackItems in videoClipTracks.findall('ClipTrack/ClipItems/TrackItems/TrackItem'):
-                      trackItem = trackItems.get('ObjectRef')
-                      #print ('Video Clip inside Track') #:', trackItem)
+            for trackID in audioClipTrackID.findall('TrackGroup/Tracks/Track'):
+              trackID = trackID.get('ObjectURef')
 
-                      #Retrieving more information from each VideoClipTrackItem
-                      for videoClipTrackItems in root.findall('.//VideoClipTrackItem'):
-                        videoClipTrackItem = videoClipTrackItems.get ('ObjectID')
-                        if videoClipTrackItem == trackItem:
-                          start = int(videoClipTrackItems.find('ClipTrackItem/TrackItem/Start').text)
-                          start = start / 8441789933
-                          #print ('Clip Start position in Timeline: ', start)
-                          end = int(videoClipTrackItems.find('ClipTrackItem/TrackItem/End').text)
-                          end = (end / 8441789933)-1
+              #Link between TrackGroups & ClipTrackItems via ClipTrack
+              for audioClipTracks in root.findall('.//AudioClipTrack'):
+                audioClipTrack = audioClipTracks.get('ObjectUID')
+                if audioClipTrack == trackID:
+                  audioClipTrackID = audioClipTracks.find('ClipTrack/Track/ID').text
+                  for trackItems in audioClipTracks.findall('ClipTrack/ClipItems/TrackItems/TrackItem'):
+                    trackItem = trackItems.get('ObjectRef')
+                    #print ('Audio Clip inside Track') #:', trackItem)
 
-                          #if it is a text graphic
+                    #Retrieving more information from each AudioClipTrackItem
+                    for audioClipTrackItems in root.findall('.//AudioClipTrackItem'):
+                      audioClipTrackItem = audioClipTrackItems.get ('ObjectID')
+                      if audioClipTrackItem == trackItem:
+                        start = int(audioClipTrackItems.find('ClipTrackItem/TrackItem/Start').text)
+                        start = start / 8441789933
+                        #print ('Clip Start position in Timeline: ', start)
+                        end = int(audioClipTrackItems.find('ClipTrackItem/TrackItem/End').text)
+                        end = (end / 8441789933)-1
+                        #print ('Clip End position in Timeline: ', end)
+
+                        #Now Retrieving more information from each SubClip Linked
+                        subClipRef = audioClipTrackItems.find('ClipTrackItem/SubClip').get('ObjectRef') #SubClip's Ref links with SubCLips
+                        for subclips in root.findall('.//SubClip'):
+                          subclip = subclips.get('ObjectID')
+                          if subclip == subClipRef:
+                            if subclips.find('MasterClip') != None:
+                              masterClipRef = subclips.find('MasterClip').get('ObjectURef')
+                            else:
+                              masterClipRef= None
+
+                            # Retrieving Relative Amount of frames available since start of MasterClip
+                            #masterClipRef = subclips.find('Clip').get('ObjectRef')
+                            for audioclips in root.findall('.//AudioClip'):
+                              audioclip = audioclips.get('ObjectID')
+                              if audioclip == masterClipRef:
+                                clipTimecodeIn = int(audioclips.find('Clip/InPoint').text)
+                                clipTimecodeOut = int(audioclips.find('Clip/OutPoint').text)
+
+                    # Add Info to the sequences' clip list.
+                    # Buscar secuencia y agregar lista de clips ahora.
+                    for sequence in projectMediaList:
+                      if sequence.id == openId:
+                        sequence.timeline.append((('ATRK' + audioClipTrackID), masterClipRef, start, end, clipTimecodeIn, clipTimecodeOut))
+      n += 1
+
+def getMediaList (xml):
+
+  root = ET.fromstring(xml)
+  nbin = 0
+  mediaList = []
+
+  #Find ProjectItem list of Bins and its content's ObjectURefs)
+  for bins in root.findall('.//ProjectItemContainer/..[@ObjectUID]'):
+    try:
+      binName = (bins.find('ProjectItem/Name')).text
+      binId = bins.get('ObjectUID')
+      matchs = 0 #check for matchs in mediaList
+
+      # if not duplicated
+      for instance in mediaList:
+        if isinstance (instance, Bin):
+          if instance.id == binId:
+            matchs +=1
+      if matchs == 0:
+        mediaList.append(Bin(binName, binId))
+        nbinPos = len(mediaList) - 1
+    except:
+      print ('')
+
+    #Get ObjectURefs to later match with Masterclips IDs
+    for items in bins.findall('ProjectItemContainer/Items/Item'):
+      itemID = items.get('ObjectURef')
+
+      #If its a Bin
+      try:
+        for items2 in root.findall('./BinProjectItem'):
+          binId2 = items2.get ('ObjectUID')
+          if binId2 == itemID:
+            binName = items2.find('ProjectItem/Name').text
+            print ('Bin inside Bin', binName)
+            nbin += 1
+            mediaList.append(Bin(binName, binId2))
+            nbinPos = len(mediaList) - 1
+            mediaList[nbinPos].inBin = binId #this Works Wrong
+
+      except:
+        print ('')
+
+      #Find Ref in ClipProjectItems's matching Objects IDs
+      for clipProjectItems in root.findall('.//MasterClip/..[@ObjectUID]'):
+        clipProjectItem = clipProjectItems.get('ObjectUID')
+        if clipProjectItem == itemID:
+          masterIdRef = clipProjectItems.find('MasterClip').get('ObjectURef')
+          #print ('Match', masterIdRef)
+          for masterClips in root.findall('./MasterClip'):
+            masterClipID = masterClips.get('ObjectUID') # This is The global ID to link with project's bin
+            auvidRef = (masterClips.find('Clips/Clip')).get('ObjectRef')
+            if masterClipID == masterIdRef:
+              if masterClips.find('LoggingInfo') != None:
+                clipLoggingRef = masterClips.find('LoggingInfo').get('ObjectRef')
+
+                #Search for ClipLoggingInfo with matching ObjectRef
+                for clipLoggings in root.findall('ClipLoggingInfo'):
+                  clipLoggingID = clipLoggings.get('ObjectID')
+
+                  if clipLoggingID == clipLoggingRef:
+                    try:
+                      clipName = clipLoggings.find('ClipName').text
+                      if clipName == None:
+                        clipName = clipLoggings.find('Name').text
+                    except:
+                      clipName = 'Not Available'
+                      #Aqui ver Texto
+                    print ('In Bin ', binName,'Clip ', clipName)
+                    try:
+                      tapeName = clipLoggings.find('TapeName').text
+                      print ('TapeName:', tapeName)
+                    except:
+                      tapeName = 'Not Available'
+                      print ('TapeName:', tapeName)
+                    try:
+                      mediaInP = int(clipLoggings.find('MediaInPoint').text)
+                      mediaInP = (mediaInP / 8441789933)
+                      print ('Media Start position:',mediaInP)
+                    except:
+                      mediaInP = 0
+                    try:
+                      mediaOutP = int(clipLoggings.find('MediaOutPoint').text)
+                      mediaOutP = (mediaOutP / 8441789933) - 1
+                      print ('Media End position:',mediaOutP)
+                    except:
+                      mediaOutP = 0
+                    try:
+                      mediaFrameR = int(clipLoggings.find('MediaFrameRate').text)
+                      mediaFrameR = round((10594584000 * 23.976) / mediaFrameR, 3)
+                      print ('Medias Original Frame Rate :', mediaFrameR)
+                    except:
+                      mediaFrameR = None
+
+                    #Find AudioClip and VideoClip link with MasterClip
+                    for auvidIDs in root.findall('.//Clip/..[@ObjectID]'):
+                      try:
+                        auvidMediaSourceRef = auvidIDs.find('Clip/Source').get('ObjectRef')
+                        auvidID = auvidIDs.get('ObjectID')
+                        if auvidID ==  auvidRef:
+                          auvidID = auvidIDs.get('ObjectID')
+                          classID = auvidIDs.get('ClassID')
+                          if classID == '9308dbef-2440-4acb-9ab2-953b9a4e82ec' or classID == 'b8830d03-de02-41ee-84ec-fe566dc70cd9':
+                            classID = 'Media'
+
+                          #If it's Media
                           try:
-                            textRef=videoClipTrackItems.find('ClipTrackItem/ComponentOwner/Components').get('ObjectRef')
+                            for MediaSources in root.findall('.//MediaSource/..[@ObjectID]'):
+                              MediaSource = MediaSources.get('ObjectID')
+                              if MediaSource == auvidMediaSourceRef: #A clip is found
+
+                                # Create Instance of Clip
+                                mediaList.append(MasterClip())
+                                mediaList[(len(mediaList)-1)].id = masterClipID  # Id linking Bins and its instances in Sequences
+                                mediaList[(len(mediaList)-1)].name = clipName
+                                mediaList[(len(mediaList)-1)].tapeName = tapeName
+                                mediaList[(len(mediaList)-1)].frameRate = mediaFrameR
+                                mediaList[(len(mediaList)-1)].mediaStart = mediaInP  # Media's start timecode
+                                mediaList[(len(mediaList)-1)].mediaEnd = mediaOutP
+                                mediaList[(len(mediaList) - 1)].inBin = binId
+                                mediaList[nbinPos].ingest(masterClipID)
+
+                                if MediaSources.find('MediaSource/Media').get('ObjectURef') != None:
+                                  mediaRef = MediaSources.find('MediaSource/Media').get('ObjectURef')
+                                  for medias in root.findall('.//Media'):
+                                    mediaID = medias.get('ObjectUID')
+                                    if mediaID == mediaRef:
+                                      filePath = medias.find('FilePath').text
+                                      mediaList[(len(mediaList) - 1)].filePath = filePath
+                                      try:  # Internal Premiere's clips have non valid a numeric reference for file path
+                                        filePath = int(filePath)
+                                        filePath = 'Not Available'
+                                        mediaList[(len(mediaList) - 1)].filePath = filePath
+                                        # print ('Its file path is ', filePath)
+                                      except:
+                                        print ('Its file path is ', filePath)
+
+                                print ('clip', mediaList[(len(mediaList) - 1)])
                           except:
-                            textRef=None
+                            print ('')
+                          #If Sequence
+                          try:
+                            for sequenceIDs in root.findall('.//SequenceSource/..[@ObjectID]'):
+                              sequenceSourceID = sequenceIDs.get('ObjectID')
+                              if sequenceSourceID == auvidMediaSourceRef:
+                                sequenceRef = sequenceIDs.find('SequenceSource/Sequence').get('ObjectURef') #Link w/ Sequences Id
 
-                          #print ('Clip End position in Timeline: ', end)
+                                for sequences in root.findall('./Sequence'):
+                                  sequenceID = sequences.get('ObjectUID')
+                                  if sequenceID == sequenceRef:
+                                    seqHeight = sequences.find('Node/Properties/MZ.Sequence.PreviewFrameSizeHeight').text
+                                    seqWidth = sequences.find('Node/Properties/MZ.Sequence.PreviewFrameSizeWidth').text
+                                    print ('Sequence is', seqWidth, 'x', seqHeight)
 
-                          #Now Retrieving more information from each SubClip Linked
-                          subClipRef = videoClipTrackItems.find('ClipTrackItem/SubClip').get('ObjectRef') #SubClip's Ref links with SubCLips
-                          for subclips in root.findall('.//SubClip'):
-                            subclip = subclips.get('ObjectID')
-                            if subclip == subClipRef:
-                              if subclips.find('MasterClip') != None:
-                                masterClipRef = subclips.find('MasterClip').get('ObjectURef')
-                              else:
-                                masterClipRef= None
-                              clipName = subclips.find('Name').text
+                                    # Now FrameRates
+                                    for trackGroupIDs in sequences.findall('TrackGroups/TrackGroup/Second/.[@ObjectRef]'):
+                                      ObjectRef = trackGroupIDs.get('ObjectRef')  # Referencia al ID de VideoTrackGroups
 
-                              #Try Retrieving text from Premiere
-                              if clipName == 'Graphic':
-                                try:
-                                  for componentsID in root.findall('VideoComponentChain'):
-                                    componentID = componentsID.get('ObjectID')
-                                    if textRef == componentID:
-                                      videoFilterRef = componentsID.find('ComponentChain/Components/Component').get('ObjectRef')
-                                      if root.findall('VideoFilterComponent') !=None:
-                                        for videoFilterComponents in root.findall('VideoFilterComponent'):
-                                          videoFilterID = videoFilterComponents.get('ObjectID')
-                                          if videoFilterID == videoFilterRef:
-                                            clipName = videoFilterComponents.find('Component/InstanceName').text
-                                except:
-                                  clipName = clipName
+                                      for videoTrackGroup in root.findall('.//VideoTrackGroup'):
+                                        if ObjectRef == videoTrackGroup.get('ObjectID'):
+                                          # Frame Rate del Video TrackGroup
+                                          seqVidFrameRate = int(videoTrackGroup.find('TrackGroup/FrameRate').text)
+                                          seqVidFrameRate = round((10594584000 * 23.976) / (seqVidFrameRate), 3)
+                                          print ('Video FrameRate: ', seqVidFrameRate, 'fps')
 
-                              #print ('Clip Name is', clipName)
+                                      for audioTrackGroup in root.findall('.//AudioTrackGroup'):
+                                        if ObjectRef == audioTrackGroup.get('ObjectID'):
+                                          # Frame Rate del Audio TrackGroup
+                                          seqAudFrameRate = audioTrackGroup.find('TrackGroup/FrameRate').text
+                                          seqAudFrameRate = int(seqAudFrameRate)
+                                          seqAudFrameRate = (5292000 * 48000) / (seqAudFrameRate)
+                                          print ('Audio FrameRate: ', seqAudFrameRate, 'kHz')
 
-                              #Retrieving more information from VideoClip Objects
-                              clipRef = subclips.find('Clip').get('ObjectRef')
-                              for videoclips in root.findall('.//VideoClip'):
-                                videoclip = videoclips.get('ObjectID')
-                                if videoclip == clipRef:
-                                  clipTimecodeIn = int(videoclips.find('Clip/InPoint').text)
-                                  clipTimecodeIn = clipTimecodeIn/8441789933
-                                  clipTimecodeOut = int(videoclips.find('Clip/OutPoint').text)
-                                  clipTimecodeOut = (clipTimecodeOut/8441789933)-1
-                                  #print ('Clip Start position Inner Timecode:', clipTimecodeIn) #Relative Amount of frames available since start of data
-                                  #print ('Clip End position Inner Timecode:', clipTimecodeOut) #Relative Amount of frames available since start of data
+                                    #Create Instance of Sequence
+                                    mediaList.append(Sequence())
+                                    mediaList[(len(mediaList)-1)].id = sequenceID
+                                    mediaList[(len(mediaList)-1)].name = clipName
+                                    mediaList[(len(mediaList)-1)].height = seqHeight
+                                    mediaList[(len(mediaList)-1)].width = seqWidth
+                                    mediaList[(len(mediaList)-1)].vidframerate = seqVidFrameRate
+                                    mediaList[(len(mediaList)-1)].audframerate = seqAudFrameRate
+                                    mediaList[(len(mediaList) - 1)].inBin = binId
+                                    mediaList[nbinPos].ingest(sequenceID)
 
-                                  #Retrieve Timecode Start Value from Clip
 
-                                  for masterclips in root.findall ('.//MasterClip'):
-                                    masterclipID = masterclips.get('ObjectUID')
-                                    if masterclipID == masterClipRef:
-                                      if masterclips.find('LoggingInfo') != None:
-                                        clipLoggingRef = masterclips.find('LoggingInfo').get('ObjectRef')
-                                        for clipLoggings in root.findall('ClipLoggingInfo'):
-                                          clipLoggingID = clipLoggings.get ('ObjectID')
-                                          if clipLoggingID == clipLoggingRef:
-                                            try: tapeName = clipLoggings.find('TapeName').text
-                                              #print ('TapeName:', tapeName)
-                                            except:
-                                              tapeName = 'Not Available'
-                                            try:
-                                              mediaInP = int(clipLoggings.find('MediaInPoint').text)
-                                              mediaInP = (mediaInP / 8441789933)
-                                              #print ('Media Start position:',mediaInP)
-                                            except: mediaInP = 0
-                                            try:
-                                              mediaOutP = int(clipLoggings.find('MediaOutPoint').text)
-                                              mediaOutP = (mediaOutP / 8441789933)-1
-                                              #print ('Media End position:',mediaOutP)
-                                            except:
-                                              mediaOutP = 0
+                          except:
+                            print ('')
 
-                                              mediaFrameR = int(clipLoggings.find('MediaFrameRate').text)
-                                              mediaFrameR = round((10594584000*23.976)/ mediaFrameR,3)
-                                              #print ('Medias Original Frame Rate :', mediaFrameR)
+                      except:
+                        print ('')
+  nbin +=1
+  return mediaList
 
-                                  # Retrieve file path information
-                                  videoMedSrcRef = videoclips.find('Clip/Source').get('ObjectRef')
-                                  for videoMediaSources in root.findall('.//VideoMediaSource'):
-                                    videoMediaSource = videoMediaSources.get('ObjectID')
-                                    if videoMediaSource == videoMedSrcRef:
-                                      if videoMediaSources.find('MediaSource/Media').get(
-                                              'ObjectURef') != None:
-                                        mediaRef = videoMediaSources.find('MediaSource/Media').get(
-                                          'ObjectURef')
-                                        for medias in root.findall('.//Media'):
-                                          mediaID = medias.get('ObjectUID')
-                                          if mediaID == mediaRef:
-                                            filePath = medias.find('FilePath').text
-                                            try: #Internal Premiere's clips have non valid a numeric reference for file path
-                                              filePath = int(filePath)
-                                              filePath = 'Not Available'
-                                              #print ('Its file path is ', filePath)
-                                            except:
-                                              print ('Its file path is ', filePath)
-
-                      # Add Info to the sequences' clip list.
-                      seq[n].clips.append([('SEQ'+str(n)),('VTRK' + videoClipTrackID), filePath, clipName, tapeName, timecoder(start, seq[n].vidframerate),timecoder(end, seq[n].vidframerate),timecoder((mediaInP + clipTimecodeIn), seq[n].vidframerate),timecoder((mediaOutP + clipTimecodeOut), seq[n].vidframerate),mediaFrameR])
-
-        #Now Check Audio Tracks
-        for trackGroupIDs in sequences.findall('TrackGroups/TrackGroup/Second/.[@ObjectRef]'):
-          ObjectRef = trackGroupIDs.get('ObjectRef')  # Referencia al ID de VideoTrackGroups
-
-          for audioClipTrackID in root.findall('.//AudioTrackGroup'):
-            if ObjectRef == audioClipTrackID.get('ObjectID'):
-
-              #Frame Rate del Audio TrackGroup
-              seq[n].audframerate = audioClipTrackID.find('TrackGroup/FrameRate').text
-              seq[n].audframerate = int(seq[n].audframerate)
-              seq[n].audframerate = (5292000*48000)/(seq[n].audframerate)
-              #print ('Audio FrameRate: ', seq[n].audframerate, 'kHz')
-
-              for trackID in audioClipTrackID.findall('TrackGroup/Tracks/Track'):
-                trackID = trackID.get('ObjectURef')
-
-                #Link between TrackGroups & ClipTrackItems via ClipTrack
-                for audioClipTracks in root.findall('.//AudioClipTrack'):
-                  audioClipTrack = audioClipTracks.get('ObjectUID')
-                  if audioClipTrack == trackID:
-                    audioClipTrackID = audioClipTracks.find('ClipTrack/Track/ID').text
-                    for trackItems in audioClipTracks.findall('ClipTrack/ClipItems/TrackItems/TrackItem'):
-                      trackItem = trackItems.get('ObjectRef')
-                      #print ('Audio Clip inside Track') #:', trackItem)
-
-                      #Retrieving more information from each AudioClipTrackItem
-                      for audioClipTrackItems in root.findall('.//AudioClipTrackItem'):
-                        audioClipTrackItem = audioClipTrackItems.get ('ObjectID')
-                        if audioClipTrackItem == trackItem:
-                          start = int(audioClipTrackItems.find('ClipTrackItem/TrackItem/Start').text)
-                          start = start / 8441789933
-                          #print ('Clip Start position in Timeline: ', start)
-                          end = int(audioClipTrackItems.find('ClipTrackItem/TrackItem/End').text)
-                          end = (end / 8441789933)-1
-                          #print ('Clip End position in Timeline: ', end)
-
-                          #Now Retrieving more information from each SubClip Linked
-                          subClipRef = audioClipTrackItems.find('ClipTrackItem/SubClip').get('ObjectRef') #SubClip's Ref links with SubCLips
-                          for subclips in root.findall('.//SubClip'):
-                            subclip = subclips.get('ObjectID')
-                            if subclip == subClipRef:
-                              if subclips.find('MasterClip') != None:
-                                masterClipRef = subclips.find('MasterClip').get('ObjectURef')
-                              else:
-                                masterClipRef= None
-                              clipName = subclips.find('Name').text
-                              #print ('Clip Name is', clipName)
-
-                              # Retrieving more information from AudioClip Objects
-                              clipRef = subclips.find('Clip').get('ObjectRef')
-                              for audioclips in root.findall('.//AudioClip'):
-                                audioclip = audioclips.get('ObjectID')
-                                if audioclip == clipRef:
-                                  clipTimecodeIn = int(audioclips.find('Clip/InPoint').text)
-                                  clipTimecodeIn = clipTimecodeIn / 8441789933
-                                  clipTimecodeOut = int(audioclips.find('Clip/OutPoint').text)
-                                  clipTimecodeOut = (clipTimecodeOut / 8441789933)-1
-                                  #print ('Clip Start position Inner Timecode:', clipTimecodeIn) #Relative Amount of frames available since start of data
-                                  #print ('Clip End position Inner Timecode:', clipTimecodeOut) #Relative Amount of frames available since start of data
-
-                                  # Retrieve Timecode Start Value from Clip
-
-                                  for masterclips in root.findall('.//MasterClip'):
-                                    masterclipID = masterclips.get('ObjectUID')
-                                    if masterclipID == masterClipRef:
-                                      if masterclips.find('LoggingInfo') != None:
-                                        clipLoggingRef = masterclips.find('LoggingInfo').get('ObjectRef')
-                                        for clipLoggings in root.findall('ClipLoggingInfo'):
-                                          clipLoggingID = clipLoggings.get('ObjectID')
-                                          if clipLoggingID == clipLoggingRef:
-                                            if clipLoggings.find('TapeName').text != None:
-                                              tapeName = clipLoggings.find('TapeName').text
-                                              #print ('TapeName:', tapeName)
-                                            else:
-                                              tapeName = 'Not Available'
-                                            if clipLoggings.find('MediaInPoint').text != None:
-                                              mediaInP = int(clipLoggings.find('MediaInPoint').text)
-                                              mediaInP = (mediaInP / 8441789933)
-                                              #print ('Media Start position :', mediaInP)
-                                              mediaOutP = int(clipLoggings.find('MediaOutPoint').text)
-                                              mediaOutP = (mediaOutP / 8441789933) - 1
-                                              #print ('Media End position :', mediaOutP)
-                                              if int(clipLoggings.find('TimecodeFormat').text) == 200:
-                                                mediaFrameR = int(clipLoggings.find('MediaFrameRate').text)
-                                                mediaFrameR = round(((5291994.71*48000) / mediaFrameR)) #improved ratio
-                                              else:
-                                                mediaFrameR = int(clipLoggings.find('MediaFrameRate').text)
-                                                mediaFrameR = (10594584000 * 23.976) / mediaFrameR
-                                              #print ('Medias Original Frame Rate :', mediaFrameR)
-
-                                  #Retrieve file path information
-                                  audioMedSrcRef = audioclips.find('Clip/Source').get('ObjectRef')
-                                  for audioMediaSources in root.findall('.//AudioMediaSource'):
-                                    audioMediaSource = audioMediaSources.get('ObjectID')
-                                    if audioMediaSource == audioMedSrcRef:
-                                      if audioMediaSources.find('MediaSource/Media').get('ObjectURef') !=None:
-                                        mediaRef = audioMediaSources.find('MediaSource/Media').get('ObjectURef')
-                                        for medias in root.findall('.//Media'):
-                                          mediaID = medias.get('ObjectUID')
-                                          if mediaID == mediaRef:
-                                            filePath = medias.find('FilePath').text
-                                            #print ('Its file path is ', filePath)
-
-                      #Add Info to the sequences' clip list.
-                      seq[n].clips.append([('SEQ'+str(n)),('ATRK'+audioClipTrackID),filePath, clipName, tapeName, timecoder(start,seq[n].vidframerate), timecoder (end, seq[n].vidframerate), timecoder((mediaInP+clipTimecodeIn),seq[n].vidframerate),timecoder((mediaOutP+clipTimecodeOut),seq[n].vidframerate),mediaFrameR])
-
-        print (seq[n].name, seq[n].vidframerate)
-        print (seq[n].clips)
-        n += 1
 
 def timecoder(frames, timebase):
   if timebase <1000:
@@ -323,12 +396,13 @@ def timecoder(frames, timebase):
     return "%02d:%02d:%02d:%03d" % (h, m, s, mseg)
 
 
-xml = OpenProj('popup2.prproj') #YourFile Here
-loadSequences(xml)
-print ('OK')
-#save = SaveProj (xml,'proyectonuevo.prproj')
+projectXml = OpenProj('test.prproj') #Your Project File Here
+projectMediaList = getMediaList(projectXml)
+seqID = '90b9a44d-f408-4616-b5d0-d48bf905137a' #This is temporal and should be activated by selecting a sequence retrieved. Here put yours.
+projectSequences = openSequence(projectXml, seqID)
+#SaveProj (xml,'proyectonuevo.prproj')
 
-#Calculo para frames y frecuencias
+#Frame & Frequency Factors for Calculus
 #X=(10594584000*23,976)/framerate
 #x = (5292000*48000)/freq
-#1 frame = 8441789933 * dur / 8475666401,209865089699074
+#1 frame = 8441789933 * dur # 8475666401,209865089699074
