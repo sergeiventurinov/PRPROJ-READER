@@ -33,11 +33,10 @@ class MasterClip:
 
 
 class Bin:
-    def __init__(self, name, self_id, parent):
+    def __init__(self, name, self_id, inbin):
         self.id = self_id
         self.name = name
-        self.parent = parent  # Parent Bin Id
-        self.inbin = None
+        self.inbin = inbin  # Parent Bin Id
         self.contains = []  # of Clip Items contained.
 
     def ingest(self, clip_id):
@@ -469,7 +468,7 @@ def get_media_list(xml):
                         print('')
                         print('Bin', bin_name2, 'inside Bin', bin_name)
                         nbin += 1
-                        media_list.append(Bin(bin_name2, bin_id2))
+                        media_list.append(Bin(bin_name2, bin_id2, bin_id))
                         bin_pos = len(media_list) - 1
                         media_list[bin_pos].inbin = bin_id
 
