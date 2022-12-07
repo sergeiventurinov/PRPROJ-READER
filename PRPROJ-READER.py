@@ -30,6 +30,7 @@ class MasterClip:
         self.mediastart = 0
         self.mediaend = 0
         self.inbin = 0
+        self.frameratefactor = 0
 
 
 class Bin:
@@ -48,6 +49,28 @@ class Bin:
         else:
             return False
 
+
+class ClipInTimeline:
+    def __init__(self, id_ref, kind, track, start_pos_timeline, end_pos_timeline, timecode_in, timecode_out, ismuted):
+        self.id = id_ref
+        self.kind = kind  # Audio, Video, Text, etc.
+        self.track_position = track  # Which track is it in
+        self.pos_start = start_pos_timeline  # First Frame position in Timeline
+        self.pos_end = end_pos_timeline  # Last Frame position in Timeline
+        self.timecode_in = timecode_in  # Clip's First Frame's timecode reference (relative since first frame available)
+        self.timecode_out = timecode_out  # Clip's Last Frame's timecode reference (relative since first frame available)
+        self.ismuted = ismuted
+
+    def isvideo(self, scale, position, rotation, opacity, text):
+        self.scale = scale
+        self.position = position
+        self.rotation = rotation
+        self.opacity = opacity
+        self.text = text
+
+    def isaudio(self, level, balance):
+        self.level = level # List containing [Level, Relative Position of KeyFrame since Clip's First Frame in Timeline]
+        self.balance = balance
 
 def open_proj(filename):
     try:
@@ -85,8 +108,9 @@ def open_sequence(xml):
     n = 0
     for sequences in root.findall('./Sequence'):
         sequence_id = sequences.get('ObjectUID')
+
         print('')
-        print('Reading Sequence', sequence_id)
+        print('Reading Sequence')
 
         # First Check Video Tracks
 
@@ -112,16 +136,18 @@ def open_sequence(xml):
                                     for video_clip_track_items in root.findall('.//VideoClipTrackItem'):
                                         video_clip_track_item_id = video_clip_track_items.get('ObjectID')
                                         if video_clip_track_item_id == trackitem_ref:
+                                            print('')
+                                            print('Video Clip in Sequence.')
                                             try:
                                                 mute = video_clip_track_items.find('ClipTrackItem/IsMuted').text
                                                 print('Clip is Muted')
                                             except:
                                                 mute = False
                                             start = int(video_clip_track_items.find('ClipTrackItem/TrackItem/Start').text)
-                                            start = start / frame_rate_factor
+                                            start = round(start / frame_rate_factor)
                                             # print('Clip Start position in Timeline: ', start)
                                             end = int(video_clip_track_items.find('ClipTrackItem/TrackItem/End').text)
-                                            end = end / frame_rate_factor
+                                            end = round((end / frame_rate_factor)-1)
                                             # print('Clip End position in Timeline: ', end)
 
                                             # To search Text content / Scale Info / Motion Attributes.
@@ -139,11 +165,11 @@ def open_sequence(xml):
                                                     for video_components in component_chains.findall('ComponentChain/Components/Component'):
                                                         video_components_ref = video_components.get('ObjectRef')
                                                         if component_chain_id == cliptrackitem_component_ref:
-                                                            print('Video Clip in Sequence.')
+
                                                             for filters in root.findall('VideoFilterComponent'):
                                                                 filter_id = filters.get('ObjectID')
                                                                 if filter_id == video_components_ref:
-                                                                    print('Accessing attributes')
+                                                                    # print('Accessing attributes')
 
                                                                     # Text Clip?
                                                                     try:
@@ -274,19 +300,26 @@ def open_sequence(xml):
                                                     for videoclips in root.findall('.//VideoClip'):
                                                         videoclip_id = videoclips.get('ObjectID')
                                                         if videoclip_id == clip_ref:
+                                                            for objects in projectMediaList:
+                                                                if type(objects) is MasterClip:
+                                                                    if objects.id == masterclip_ref:
+                                                                        cframerate = objects.framerate
+                                                                        cinpoint = objects.mediastart
+
                                                             clip_timecode_in = int(videoclips.find('Clip/InPoint').text)
                                                             clip_timecode_out = int(videoclips.find('Clip/OutPoint').text)
+                                                            try:
+                                                                clip_timecode_in = round((clip_timecode_in) / cframerate)+ cinpoint
+                                                                clip_timecode_out = round((clip_timecode_out-1) / cframerate)+ cinpoint -1
+                                                            except:
+                                                                pass
 
                                     # Add Attributes to Sequence in ProjectMediaList
                                     for objects in projectMediaList:
                                         if type(objects) is Sequence:
                                             if objects.id == sequence_id:
-                                                objects.timeline.append((('VTRK' + video_clip_track_id),
-                                                                                      masterclip_ref, start, end,
-                                                                                      clip_timecode_in, clip_timecode_out,
-                                                                                      scale, position, rotation,
-                                                                                      opacity, text, mute))
-                                                # print('Sequence', objects.name, 'successfully read')
+                                                objects.timeline.append(ClipInTimeline(masterclip_ref, 'video', ('V' + str(video_clip_track_id)), start, end, clip_timecode_in, clip_timecode_out, mute))
+                                                objects.timeline[-1].isvideo(scale, position, rotation, opacity, text)
 
         # Now Check Audio Tracks
 
@@ -295,7 +328,7 @@ def open_sequence(xml):
 
             for audio_trackgroups in root.findall('.//AudioTrackGroup'):
                 if trackgroup_object_ref == audio_trackgroups.get('ObjectID'):
-                    audio_rate_factor = int(audio_trackgroups.find('TrackGroup/FrameRate').text)
+                    #frame_rate_factor = int(audio_trackgroups.find('TrackGroup/FrameRate').text)
                     # print('Audio Frame Rate', audRateFactor)
                     for audio_tracks in audio_trackgroups.findall('TrackGroup/Tracks/Track'):
                         track_ref = audio_tracks.get('ObjectURef')
@@ -304,9 +337,10 @@ def open_sequence(xml):
                         for audio_clip_tracks in root.findall('.//AudioClipTrack'):
                             audio_clip_track_id = audio_clip_tracks.get('ObjectUID')
                             if audio_clip_track_id == track_ref:
-                                # audio_trackgroups = audio_clip_tracks.find('ClipTrack/Track/ID').text
+                                track_id = int(audio_clip_tracks.find('ClipTrack/Track/ID').text) - 1
                                 for track_items in audio_clip_tracks.findall('ClipTrack/ClipItems/TrackItems/TrackItem'):
                                     trackitem_ref = track_items.get('ObjectRef')
+                                    print('')
                                     print('Audio Clip in Sequence')  # :', trackItem)
 
                                     # Retrieving more information from each AudioClipTrackItem
@@ -319,10 +353,10 @@ def open_sequence(xml):
                                             except:
                                                 mute = False
                                             start = int(audio_clip_track_items.find('ClipTrackItem/TrackItem/Start').text)
-                                            start = start / audio_rate_factor
+                                            start = round(start / frame_rate_factor)
                                             # print('Clip Start position in Timeline: ', start)
                                             end = int(audio_clip_track_items.find('ClipTrackItem/TrackItem/End').text)
-                                            end = end / audio_rate_factor
+                                            end = round((end / frame_rate_factor)-1)
                                             # print('Clip End position in Timeline: ', end)
 
                                             # Audio Attributes.
@@ -341,7 +375,7 @@ def open_sequence(xml):
                                                             for filters in root.findall('AudioFilterComponent'):
                                                                 filter_id = filters.get('ObjectID')
                                                                 if filter_id == audio_components_ref:
-                                                                    print('Accessing attributes', filter_id)
+                                                                    # print('Accessing attributes')
                                                                     try:
                                                                         for filters_refs in filters.findall('AudioComponent/Component/Params/Param'):
                                                                             filter_ref = filters_refs.get('ObjectRef')
@@ -401,8 +435,7 @@ def open_sequence(xml):
                                                 pass
 
                                             # Now Retrieving more information from each SubClip Linked
-                                            subclip_ref = audio_clip_track_items.find('ClipTrackItem/SubClip').get(
-                                                'ObjectRef')  # SubClip's Ref links with SubCLips
+                                            subclip_ref = audio_clip_track_items.find('ClipTrackItem/SubClip').get('ObjectRef')  # SubClip's Ref links with SubCLips
                                             for subclips in root.findall('.//SubClip'):
                                                 subclip_id = subclips.get('ObjectID')
                                                 if subclip_id == subclip_ref:
@@ -412,17 +445,42 @@ def open_sequence(xml):
                                                         masterclip_ref = None
 
                                                     # Retrieving Relative Amount of frames available since start of MasterClip
+                                                    clip_ref = subclips.find('Clip').get('ObjectRef')
                                                     for audioclips in root.findall('.//AudioClip'):
                                                         audioclip_id = audioclips.get('ObjectID')
-                                                        if audioclip_id == masterclip_ref:
+                                                        if audioclip_id == clip_ref:
+
                                                             clip_timecode_in = int(audioclips.find('Clip/InPoint').text)
                                                             clip_timecode_out = int(audioclips.find('Clip/OutPoint').text)
+                                                            try:
+                                                                #Timecode Notation depends on Clip being natively a video or just audio
+                                                                for objects in projectMediaList:
+                                                                    if type(objects) is MasterClip:
+                                                                        if objects.id == masterclip_ref:
+                                                                            ctype = objects.type
+                                                                            # If this audio is video based or not
+                                                                            if ctype == 'Video':
+                                                                                cframerate = objects.framerate
+                                                                                cinpoint = objects.mediastart
+                                                                                clip_timecode_in = round((clip_timecode_in / cframerate)) + cinpoint  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                clip_timecode_out = round((clip_timecode_out - 1) / cframerate) + cinpoint - 1
+                                                                            if ctype == 'Audio':
+                                                                                # If this audio is audio based (non timecoded?)
+                                                                                proj_fr_ref = root.find('ProjectSettings/VideoSettings').get('ObjectRef')
+                                                                                for proj_frs in root.findall ('VideoSettings'):
+                                                                                    if proj_frs.get('ObjectID') == proj_fr_ref:
+                                                                                        cframerate = int(proj_frs.find('FrameRate').text)
+                                                                                        clip_timecode_in = round((clip_timecode_in) / cframerate)  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                        clip_timecode_out = round((clip_timecode_out - 1)/ cframerate) - 1
+                                                            except:
+                                                                pass
 
                                     # Add Attributes to Sequence in ProjectMediaList
                                     for objects in projectMediaList:
                                         if type(objects) is Sequence:
                                             if objects.id == sequence_id:
-                                                objects.timeline.append((('ATRK' + video_clip_track_id), masterclip_ref, start, end, clip_timecode_in, clip_timecode_out, level, balance, mute))
+                                                objects.timeline.append(ClipInTimeline(masterclip_ref, 'audio', ('A' + str(track_id)), start, end, clip_timecode_in, clip_timecode_out,mute))
+                                                objects.timeline[-1].isaudio(level, balance)
 
         n += 1
     xml = ET.tostring(root, encoding='UTF-8')
@@ -493,6 +551,10 @@ def get_media_list(xml):
                                     clip_logging_id = clip_loggings.get('ObjectID')
                                     if clip_logging_id == clip_logging_ref:
                                         try:
+                                            clip_frame_rate_factor = int(clip_loggings.find('MediaFrameRate').text)
+                                        except:
+                                            clip_frame_rate_factor = None
+                                        try:
                                             clip_name = clip_loggings.find('ClipName').text
                                             if clip_name is None:
                                                 clip_name = clip_loggings.find('Name').text
@@ -539,8 +601,10 @@ def get_media_list(xml):
                                                 auvid_id = auvid_ids.get('ObjectID')
                                                 if auvid_id == auvid_ref:
                                                     class_id = auvid_ids.get('ClassID')
-                                                    if class_id == '9308dbef-2440-4acb-9ab2-953b9a4e82ec' or class_id == 'b8830d03-de02-41ee-84ec-fe566dc70cd9':
-                                                        class_id = 'Media'
+                                                    if class_id == '9308dbef-2440-4acb-9ab2-953b9a4e82ec':
+                                                        class_id = 'Video'
+                                                    if class_id == 'b8830d03-de02-41ee-84ec-fe566dc70cd9':
+                                                        class_id = 'Audio'
 
                                                     # If it's Media
                                                     try:
@@ -552,8 +616,10 @@ def get_media_list(xml):
                                                                 media_list.append(MasterClip())
                                                                 media_list[(len(media_list) - 1)].id = masterclip_id  # Id linking Bins and its instances in Sequences
                                                                 media_list[(len(media_list) - 1)].name = clip_name
+                                                                media_list[(len(media_list) - 1)].type = class_id
                                                                 media_list[(len(media_list) - 1)].tapename = tape_name
                                                                 media_list[(len(media_list) - 1)].framerate = media_framerate
+                                                                media_list[(len(media_list) - 1)].frameratefactor = clip_frame_rate_factor
                                                                 media_list[(len(media_list) - 1)].mediastart = media_inpoint  # Media's start timecode
                                                                 media_list[(len(media_list) - 1)].mediaend = media_outpoint
                                                                 media_list[(len(media_list) - 1)].inbin = bin_id
