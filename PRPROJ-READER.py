@@ -51,7 +51,7 @@ class Bin:
 
 
 class ClipInTimeline:
-    def __init__(self, id_ref, kind, track, start_pos_timeline, end_pos_timeline, timecode_in, timecode_out, ismuted):
+    def __init__(self, id_ref, kind, track, start_pos_timeline, end_pos_timeline, timecode_in, timecode_out, speed, ismuted):
         self.id = id_ref
         self.kind = kind  # Audio, Video, Text, etc.
         self.track_position = track  # Which track is it in
@@ -60,6 +60,7 @@ class ClipInTimeline:
         self.timecode_in = timecode_in  # Clip's First Frame's timecode reference (relative since first frame available)
         self.timecode_out = timecode_out  # Clip's Last Frame's timecode reference (relative since first frame available)
         self.ismuted = ismuted
+        self.speed = speed
 
     def isvideo(self, scale, position, rotation, opacity, text):
         self.scale = scale
@@ -305,12 +306,27 @@ def open_sequence(xml):
                                                                     if objects.id == masterclip_ref:
                                                                         cframerate = objects.framerate
                                                                         cinpoint = objects.mediastart
+                                                                        coutpoint = objects.mediaend - 1
 
                                                             clip_timecode_in = int(videoclips.find('Clip/InPoint').text)
                                                             clip_timecode_out = int(videoclips.find('Clip/OutPoint').text)
+                                                            clip_speed = 1
                                                             try:
-                                                                clip_timecode_in = round((clip_timecode_in) / cframerate)+ cinpoint
-                                                                clip_timecode_out = round((clip_timecode_out-1) / cframerate)+ cinpoint -1
+                                                                clip_speed = round(int(videoclips.find('Clip/PlaybackSpeed').text),2)
+                                                            except:
+                                                                pass
+                                                            try:
+                                                                if videoclips.find('Clip/PlayBackwards').text == 'true':
+                                                                    clip_speed = clip_speed * (-1)
+                                                            except:
+                                                                pass
+                                                            try:
+                                                                if clip_speed > 0:
+                                                                    clip_timecode_in = round(clip_timecode_in / cframerate) + cinpoint
+                                                                    clip_timecode_out = round(clip_timecode_out / cframerate) + cinpoint - 1
+                                                                if clip_speed < 0:
+                                                                    clip_timecode_in = coutpoint - round((clip_timecode_in / cframerate)) - 1
+                                                                    clip_timecode_out = coutpoint - round((clip_timecode_out - 1) / cframerate)
                                                             except:
                                                                 pass
 
@@ -318,7 +334,7 @@ def open_sequence(xml):
                                     for objects in projectMediaList:
                                         if type(objects) is Sequence:
                                             if objects.id == sequence_id:
-                                                objects.timeline.append(ClipInTimeline(masterclip_ref, 'video', ('V' + str(video_clip_track_id)), start, end, clip_timecode_in, clip_timecode_out, mute))
+                                                objects.timeline.append(ClipInTimeline(masterclip_ref, 'video', ('V' + str(video_clip_track_id)), start, end, clip_timecode_in, clip_timecode_out, clip_speed, mute))
                                                 objects.timeline[-1].isvideo(scale, position, rotation, opacity, text)
 
         # Now Check Audio Tracks
@@ -449,29 +465,82 @@ def open_sequence(xml):
                                                     for audioclips in root.findall('.//AudioClip'):
                                                         audioclip_id = audioclips.get('ObjectID')
                                                         if audioclip_id == clip_ref:
-
+                                                            for objects in projectMediaList:
+                                                                if type(objects) is MasterClip:
+                                                                    if objects.id == masterclip_ref:
+                                                                        cframerate = objects.framerate
+                                                                        cinpoint = objects.mediastart
+                                                                        coutpoint = objects.mediaend
+                                                            clip_speed = 1
                                                             clip_timecode_in = int(audioclips.find('Clip/InPoint').text)
                                                             clip_timecode_out = int(audioclips.find('Clip/OutPoint').text)
                                                             try:
-                                                                #Timecode Notation depends on Clip being natively a video or just audio
+                                                                clip_speed = round(int(audioclips.find('Clip/PlaybackSpeed').text),2)
+                                                            except:
+                                                                pass
+                                                            try:
+                                                                if audioclips.find('Clip/PlayBackwards').text == 'true':
+                                                                    clip_speed = clip_speed * (-1)
+                                                            except:
+                                                                pass
+                                                            try:
+                                                                # Timecode Notation depends on Clip being natively a video or just audio
                                                                 for objects in projectMediaList:
                                                                     if type(objects) is MasterClip:
                                                                         if objects.id == masterclip_ref:
                                                                             ctype = objects.type
-                                                                            # If this audio is video based or not
+                                                                            # If this audio is video based (CHECKED)
                                                                             if ctype == 'Video':
-                                                                                cframerate = objects.framerate
-                                                                                cinpoint = objects.mediastart
-                                                                                clip_timecode_in = round((clip_timecode_in / cframerate)) + cinpoint  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
-                                                                                clip_timecode_out = round((clip_timecode_out - 1) / cframerate) + cinpoint - 1
+                                                                                if clip_speed > 0:
+                                                                                    cframerate = objects.framerate
+                                                                                    clip_timecode_in = round((clip_timecode_in / cframerate)) + cinpoint  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                    clip_timecode_out = round((clip_timecode_out - 1) / cframerate) + cinpoint - 1
+                                                                                if clip_speed < 0:
+                                                                                    cframerate = objects.framerate
+                                                                                    clip_timecode_in = coutpoint - round((clip_timecode_in / cframerate)) - 1  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                    clip_timecode_out = coutpoint - round((clip_timecode_out - 1) / cframerate)
                                                                             if ctype == 'Audio':
-                                                                                # If this audio is audio based (non timecoded?)
-                                                                                proj_fr_ref = root.find('ProjectSettings/VideoSettings').get('ObjectRef')
-                                                                                for proj_frs in root.findall ('VideoSettings'):
-                                                                                    if proj_frs.get('ObjectID') == proj_fr_ref:
-                                                                                        cframerate = int(proj_frs.find('FrameRate').text)
-                                                                                        clip_timecode_in = round((clip_timecode_in) / cframerate)  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
-                                                                                        clip_timecode_out = round((clip_timecode_out - 1)/ cframerate) - 1
+                                                                                # I assume this different treatment for audio lenghts depends on format
+                                                                                file_extension = (objects.filepath[len(objects.filepath) - 3:]).lower()
+                                                                                if file_extension == 'mp3':
+                                                                                    # KIND ONE: MP3 (CHECKED)
+                                                                                    cinpoint = objects.mediastart
+                                                                                    coutpoint = objects.mediaend
+                                                                                    proj_fr_ref = root.find('ProjectSettings/VideoSettings').get('ObjectRef')
+                                                                                    for proj_frs in root.findall ('VideoSettings'):
+                                                                                        if proj_frs.get('ObjectID') == proj_fr_ref:
+                                                                                            if clip_speed > 0:
+                                                                                                cframerate = int(proj_frs.find('FrameRate').text)
+                                                                                                clip_timecode_in = round((clip_timecode_in) / cframerate) + cinpoint # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                                clip_timecode_out = round((clip_timecode_out - 1)/ cframerate) + cinpoint - 1
+                                                                                            if clip_speed < 0:
+                                                                                                coutpoint = round(objects.mediaend * cframerate / int(proj_frs.find('FrameRate').text)) - 1
+                                                                                                cframerate = int(proj_frs.find('FrameRate').text)
+                                                                                                clip_timecode_in = coutpoint - round((clip_timecode_in) / cframerate)  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                                clip_timecode_out = coutpoint - round((clip_timecode_out - 1) / cframerate) + 1
+                                                                                if file_extension == 'wav':
+                                                                                    # KIND WAV TIMECODED
+                                                                                    cframerate = objects.framerate
+                                                                                    cinpoint = round(objects.mediastart / 2000)  # Originally cinpoint already divided by MediaFrameRate
+                                                                                    coutpoint = round(objects.mediaend / 2000) - 1
+                                                                                    if clip_speed > 0:
+                                                                                        clip_timecode_in = round((clip_timecode_in / cframerate / 2000)) + cinpoint  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                        clip_timecode_out = round((clip_timecode_out - 1) / cframerate / 2000) + cinpoint - 1
+                                                                                    if clip_speed < 0:
+                                                                                        clip_timecode_in = coutpoint - round((clip_timecode_in / cframerate / 2000))  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                        clip_timecode_out = coutpoint - round((clip_timecode_out - 1) / cframerate / 2000) + 1
+                                                                                if file_extension == 'aif' or file_extension == 'iff':
+                                                                                    cframerate = objects.framerate
+                                                                                    cinpoint = round(objects.mediastart / 2002)  # Originally cinpoint already divided by MediaFrameRate
+                                                                                    coutpoint = round(objects.mediaend / 2002) - 1
+                                                                                    if clip_speed > 0:
+                                                                                        clip_timecode_in = round((clip_timecode_in / cframerate / 2002)) + cinpoint - 1  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                        clip_timecode_out = round((clip_timecode_out - 1) / cframerate / 2002) + cinpoint - 1
+                                                                                    if clip_speed < 0:
+                                                                                        clip_timecode_in = coutpoint - round((clip_timecode_in / cframerate / 2002))  # Seems to be linked to Project's VideoSetting's FrameRate, Why???
+                                                                                        clip_timecode_out = coutpoint - round((clip_timecode_out - 1) / cframerate / 2002) + 1
+
+
                                                             except:
                                                                 pass
 
@@ -479,7 +548,7 @@ def open_sequence(xml):
                                     for objects in projectMediaList:
                                         if type(objects) is Sequence:
                                             if objects.id == sequence_id:
-                                                objects.timeline.append(ClipInTimeline(masterclip_ref, 'audio', ('A' + str(track_id)), start, end, clip_timecode_in, clip_timecode_out,mute))
+                                                objects.timeline.append(ClipInTimeline(masterclip_ref, 'audio', ('A' + str(track_id)), start, end, clip_timecode_in, clip_timecode_out, clip_speed, mute))
                                                 objects.timeline[-1].isaudio(level, balance)
 
         n += 1
