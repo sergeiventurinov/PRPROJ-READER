@@ -1,4 +1,4 @@
-# PRPROJ-READER
+# PRPROJ-READER (ADOBE PREMIERE's OPEN SOURCE API)
 A simple python code that reads what's inside a Premiere's project.
 
 
